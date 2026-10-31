@@ -8,7 +8,7 @@
     {
       "name": "bars",
       "source": "./",
-      "description": "Your context and plan limits as one quiet line, with a thin bar for every subagent."
+      "description": "Your context and plan limits as one quiet line, with every subagent and background task and how long each has been running."
     }
   ]
 }

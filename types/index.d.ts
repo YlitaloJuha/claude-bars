@@ -4,6 +4,13 @@ export type Minibar = {
   label: string
   tools: number
   status: 'running' | 'done' | 'failed'
+  startedAt: number
+  endedAt?: number
+}
+
+export type BackgroundTask = {
+  label: string
+  startedAt: number
 }
 
 declare module 'claude-code' {
@@ -18,6 +25,8 @@ declare module 'claude-code' {
     bars: {
       meters: Meter[]
       agents: Record<string, Minibar>
+      tasks: Record<string, BackgroundTask>
+      clockNow: number
       isCompacting: boolean
       isAfkMenuOpen: boolean
     }

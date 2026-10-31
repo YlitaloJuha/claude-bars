@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, RenderPropsOf, SessionStartInput, TurnCompleteInput } from 'claude-code'
 
-import { metersOf, miniFraction, svgBar, textBar } from '../hooks/register'
+import { backgroundId, elapsed, metersOf, miniFraction, notifiedIds, svgBar, textBar } from '../hooks/register'
 
 const session: SessionStartInput = { surface: 'desktop', isInteractive: true, cwd: '/work' }
 const props: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 75, scroll: { offset: 0, bodyRows: 10 }, view: {} }
@@ -23,7 +23,7 @@ function world(on: On, opts: { list?: Array<{ id: string; status: string }>; per
   on('session.turns', () => ({ value: opts.turnCount ?? 3 }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1000, tokens: 680, percent: opts.percent ?? 42 }, rateLimits: LIMITS } }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
-  on('tool.call', () => ({ result: {} }))
+  on('tool.call', ($, e) => ({ result: (e as { fakeResult?: object }).fakeResult ?? {} }))
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('agent.spawn', () => ({ model: 'haiku', agentId: 'A1' }))
   on('agent.list', () => ({ value: (opts.list ?? []) as never }))
@@ -63,8 +63,8 @@ test('meters name the context and each limit', () => {
 })
 
 test('a running minibar never reads as finished', () => {
-  expect(miniFraction({ label: 'a', tools: 300, status: 'running' })).toBe(0.9)
-  expect(miniFraction({ label: 'a', tools: 3, status: 'done' })).toBe(1)
+  expect(miniFraction({ label: 'a', tools: 300, status: 'running', startedAt: 0 })).toBe(0.9)
+  expect(miniFraction({ label: 'a', tools: 3, status: 'done', startedAt: 0 })).toBe(1)
 })
 
 for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
@@ -176,10 +176,97 @@ test('an agent gets a thin bar that counts its tools and ends done', async ($, o
   await $.tool.call({ tool: 'Read', file_path: 'a', agentId: 'A1' } as never)
   await $.tool.call({ tool: 'Read', file_path: 'b', agentId: 'A1' } as never)
   await $.tool.call({ tool: 'Read', file_path: 'c' } as never)
-  expect((await ui.find({ type: 'Text', text: /Read the API/ }))?.text).toBe('Read the API · 2 tools')
+  expect((await ui.find({ type: 'Text', text: /Read the API/ }))?.text).toBe('Read the API · 2 tools · 0s')
   await $.turn.complete(turn({ agentId: 'A1' } as never))
-  expect((await ui.find({ type: 'Text', text: /Read the API/ }))?.text).toBe('Read the API · done')
+  expect((await ui.find({ type: 'Text', text: /Read the API/ }))?.text).toBe('Read the API · done · 0s')
 })
+
+test('running time reads well at every length', () => {
+  expect(elapsed(0)).toBe('0s')
+  expect(elapsed(45_000)).toBe('45s')
+  expect(elapsed(124_000)).toBe('2m 04s')
+  expect(elapsed(3_780_000)).toBe('1h 03m')
+  expect(elapsed(-5)).toBe('0s')
+})
+
+test('a notification names its task ids, and a result its background id', () => {
+  expect(notifiedIds('<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>')).toEqual(['abc'])
+  expect(notifiedIds('nothing here')).toEqual([])
+  expect(backgroundId({ backgroundTaskId: 'b1' })).toBe('b1')
+  expect(backgroundId({ taskId: 'm1' })).toBe('m1')
+  expect(backgroundId({ stdout: 'x' })).toBeUndefined()
+  expect(backgroundId(undefined)).toBeUndefined()
+})
+
+const started = (id: string, description: string) => ({ tool: 'Bash', command: 'sleep 99', description, run_in_background: true, fakeResult: { backgroundTaskId: id } }) as never
+
+test('a background task is listed with its description, and its time counts up', async ($, on) => {
+  const clock = mock.clock(on)
+  world(on)
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  await $.tool.call(started('b1', 'Run the dev server'))
+  expect((await ui.find({ type: 'Text', text: /dev server/ }))?.text).toBe('Run the dev server · 0s')
+  await clock.advance(125_000)
+  expect((await ui.find({ type: 'Text', text: /dev server/ }))?.text).toBe('Run the dev server · 2m 05s')
+})
+
+test('a foreground command is not listed', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  await $.tool.call({ tool: 'Bash', command: 'ls', description: 'List files' } as never)
+  expect(await ui.find({ type: 'Text', text: /List files/ })).toBeUndefined()
+})
+
+test('a task leaves the list on its notification, or when it is stopped', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  await $.tool.call(started('b1', 'First job'))
+  await $.tool.call(started('b2', 'Second job'))
+  await $.prompt.submit({ text: '<task-notification><task-id>b1</task-id></task-notification>', wait: false, origin: { kind: 'task-notification' } })
+  expect(await ui.find({ type: 'Text', text: /First job/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Second job/ })).toBeDefined()
+  await $.tool.call({ tool: 'TaskStop', task_id: 'b2' } as never)
+  expect(await ui.find({ type: 'Text', text: /Second job/ })).toBeUndefined()
+})
+
+test('a person writing a task id does not end the task', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  await $.tool.call(started('b1', 'First job'))
+  await $.prompt.submit({ text: '<task-id>b1</task-id>', wait: false, origin: { kind: 'composer' } })
+  expect(await ui.find({ type: 'Text', text: /First job/ })).toBeDefined()
+})
+
+test('past four tasks the older ones fold under a count', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  for (let i = 1; i <= 6; i++) await $.tool.call(started('b' + i, 'Job ' + i))
+  expect(await ui.find({ type: 'Text', text: /\+2 more/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Job 6/ })).toBeDefined()
+})
+
+for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+  test(`tasks and agents draw on ${surface}`, async ($, on) => {
+    mock.clock(on)
+    world(on)
+    await $.session.start({ ...session, surface })
+    const ui = await $.ui.mount({ ...mount, surface })
+    await $.tool.call(started('b1', 'Run the dev server'))
+    await $.agent.spawn(spawn('Read the API'))
+    expect(await ui.find({ type: 'Text', text: /dev server/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Read the API/ })).toBeDefined()
+    if (surface === 'terminal') expect(await ui.find({ type: 'Text', text: />_/ })).toBeDefined()
+  })
+}
 
 test('an agent stopped with no turn end is settled from the engine list', async ($, on) => {
   const clock = mock.clock(on)

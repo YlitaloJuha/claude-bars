@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="912" height="291" viewBox="0 0 912 291" role="img" aria-label="bars alone, with three finished subagents, from a real terminal session">
+<svg xmlns="http://www.w3.org/2000/svg" width="912" height="312" viewBox="0 0 912 312" role="img" aria-label="bars alone, with three finished subagents, from a real terminal session">
 <title>bars alone, with three finished subagents, from a real terminal session</title>
-<rect width="912" height="291" rx="10" fill="#1e1e2e"/>
+<rect width="912" height="312" rx="10" fill="#1e1e2e"/>
 <circle cx="20" cy="18" r="5" fill="#f38ba8"/><circle cx="38" cy="18" r="5" fill="#f9e2af"/><circle cx="56" cy="18" r="5" fill="#a6e3a1"/>
 <g font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" xml:space="preserve">
 <text x="18.0" y="56" fill="#7f849c">⏺</text>
@@ -9,20 +9,22 @@
 <rect x="18.0" y="113" width="16.9" height="3" rx="1.5" fill="#a6adc8"/>
 <rect x="34.9" y="114" width="50.6" height="1" fill="#7f849c" fill-opacity=".55"/>
 <text x="93.9" y="119" fill="#7f849c">19% context</text>
-<rect x="203.5" y="113" width="8.4" height="3" rx="1.5" fill="#a6adc8"/>
-<rect x="211.9" y="114" width="59.0" height="1" fill="#7f849c" fill-opacity=".55"/>
-<text x="279.3" y="119" fill="#7f849c">18% 5h</text>
+<rect x="203.5" y="113" width="16.9" height="3" rx="1.5" fill="#a6adc8"/>
+<rect x="220.3" y="114" width="50.6" height="1" fill="#7f849c" fill-opacity=".55"/>
+<text x="279.3" y="119" fill="#7f849c">20% 5h</text>
 <rect x="346.8" y="113" width="16.9" height="3" rx="1.5" fill="#a6adc8"/>
 <rect x="363.6" y="114" width="50.6" height="1" fill="#7f849c" fill-opacity=".55"/>
 <text x="422.6" y="119" fill="#7f849c">26% 7d</text>
-<rect x="18.0" y="134" width="33.7" height="3" rx="1.5" fill="#7fb58a"/>
-<text x="60.1" y="140" fill="#7f849c">Read src/cart.js · done</text>
-<rect x="18.0" y="155" width="33.7" height="3" rx="1.5" fill="#7fb58a"/>
-<text x="60.1" y="161" fill="#7f849c">Read TODO.md · done</text>
-<rect x="18.0" y="176" width="33.7" height="3" rx="1.5" fill="#7fb58a"/>
-<text x="60.1" y="182" fill="#7f849c">List src folder · done</text>
-<rect x="18.0" y="219" width="876.7" height="1" fill="#7f849c" fill-opacity=".55"/>
-<text x="18.0" y="245" fill="#7f849c">❯</text>
-<rect x="18.0" y="261" width="876.7" height="1" fill="#7f849c" fill-opacity=".55"/>
+<text x="18.0" y="140" fill="#7f849c">◈</text>
+<rect x="34.9" y="134" width="33.7" height="3" rx="1.5" fill="#7fb58a"/>
+<text x="77.0" y="140" fill="#7f849c">Read src/cart.js · done · 4s</text>
+<text x="18.0" y="161" fill="#7f849c">◈</text>
+<rect x="34.9" y="155" width="33.7" height="3" rx="1.5" fill="#7fb58a"/>
+<text x="77.0" y="161" fill="#7f849c">Read TODO.md · done · 4s</text>
+<text x="18.0" y="182" fill="#7f849c">&gt;_ Run the dev server · 17s</text>
+<text x="18.0" y="203" fill="#7f849c">&gt;_ Watch the tests · 16s</text>
+<rect x="18.0" y="240" width="876.7" height="1" fill="#7f849c" fill-opacity=".55"/>
+<text x="18.0" y="266" fill="#7f849c">❯</text>
+<rect x="18.0" y="282" width="876.7" height="1" fill="#7f849c" fill-opacity=".55"/>
 </g>
 </svg>
