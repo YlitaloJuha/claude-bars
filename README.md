@@ -43,9 +43,9 @@ In the desktop app, click + next to the prompt box, then Plugins, Add marketplac
 - **Compact button:** Appears on the line from 70% context, and hides while a turn runs.
 - **Works alone, shares when it can:** If you also install [`claude-afk`](https://github.com/YlitaloJuha/claude-afk), [`claude-wrap-up`](https://github.com/YlitaloJuha/claude-wrap-up) or [`claude-todos`](https://github.com/YlitaloJuha/claude-todos), they put their controls on this line instead of their own row.
 
-<p align="center"><img src="docs/desktop.png" alt="bars in the desktop app, with the todos, AFK and wrap-up controls on the same line" width="660"></p>
+<p align="center"><img src="docs/desktop.png" alt="bars in the desktop app, listing a finished agent and three background tasks with icons and running times" width="660"></p>
 
-<p align="center"><sub>In the desktop app, with `todos`, `afk` and `wrap-up` also installed: their controls share the line.</sub></p>
+<p align="center"><sub>In the desktop app: a finished agent and three background tasks, with icons and running times. The tasks are demos, and the context bar has turned amber at 86%.</sub></p>
 
 ## Commands
 
@@ -67,7 +67,7 @@ No network, no shell commands and no file access through the mod API. It reads u
 - It sees this session only. Separate sessions you start from the app are not listed.
 - The hover list has only been checked in tests, and it needs a pointer: where there is none, the older rows stay folded.
 - Tasks are known from the moment they start in this session, so ones started before a resume are not listed.
-- The drawn bars are for the desktop app, VS Code and mobile. I have only seen them in the terminal and the desktop app.
+- The drawn bars and icons are for the desktop app, VS Code and mobile. They have been seen in the desktop app, and the terminal version in the terminal, but not in VS Code or on mobile.
 - If you use the `skins` mod, run `/skin band off` so its rings do not show as well.
 
 ## Develop
