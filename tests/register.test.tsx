@@ -28,6 +28,7 @@ function world(on: On, opts: { list?: Array<{ id: string; status: string }>; per
   on('agent.spawn', () => ({ model: 'haiku', agentId: 'A1' }))
   on('agent.list', () => ({ value: (opts.list ?? []) as never }))
   on('command.list', () => ({ value: (opts.siblings ? ['afk', 'wrap-up', 'todos'] : []).map(name => ({ name, description: '', source: 'plugin' as const })) }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('command.run', ($, e) => { compacted.push(e.command); return { text: '' } })
   on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: ['beneath'] }))
   if (opts.siblings) {
@@ -109,6 +110,13 @@ test('Compact waits until the context is worth compacting, and runs /compact', a
   await ui.press({ key: 'compact' })
   await clock.advance(5)
   expect(w.compacted).toEqual(['compact'])
+})
+
+test('/bars prints the readings', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start(session)
+  expect((await $.command.run({ command: 'bars' })).text).toBe('42% context  24% 5h  91% 7d')
 })
 
 test('Compact stays out of the way at low context', async ($, on) => {

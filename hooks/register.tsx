@@ -120,7 +120,14 @@ export const register: Register = on => {
     const result = await next(e)
     await refreshMeters($)
     $.clock.every(RECONCILE_MS, () => reconcile($))
+    // Also how the other mods tell that this line is here to hold their controls.
+    await $.command.register({ name: 'bars', description: 'Show your context and plan limits', immediate: true })
     return result
+  })
+
+  on('command.run', { command: 'bars' }, async $ => {
+    const rows = await read($, meters)
+    return { text: rows.length > 0 ? rows.map(m => `${m.percent}% ${m.label}`).join('  ') : 'No readings yet.' }
   })
 
   on('session.measure', async ($, e, next) => {
