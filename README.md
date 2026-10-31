@@ -13,7 +13,7 @@
 
 <p align="center"><sub>Only this mod enabled, combined from two real terminal sessions: agents, then background commands with their timers.</sub></p>
 
-Know how much room you have left, and what is still running, at a glance. That dev server Claude started twenty minutes ago stays in view with its description and a running clock. It costs no tokens.
+Know how much room you have left, and what is still running, at a glance. That dev server Claude started twenty minutes ago stays in view with its description and a running clock. It makes no model calls.
 
 ## Install
 
@@ -78,6 +78,10 @@ claude plugin test .
 claude --plugin-dir .
 ```
 
+## Make it yours
+
+Once it is loaded, ask your own Claude to fit it to how you work, for example to change when the bars turn amber, or how many rows show. The code is in `hooks/register.tsx`, and the license allows changes. Keep your version in a fork, so an update does not replace it. What you change is yours to check.
+
 ## Credits
 
 - The idea of a usage band above the prompt, and the way Compact gets its own dispatch, come from [skins](https://github.com/hellosverre/claude-skins) by hellosverre (MIT).
@@ -92,3 +96,7 @@ This mod works on its own, and it also works side by side with my other Claude C
 [MIT](LICENSE). `THIRD_PARTY_LICENSES.md` covers the parts that came from other projects.
 
 Provided **as is, with no warranty of any kind**. You use it at your own risk, and the author is not liable for anything that results from using it, including lost work, usage charges or changes to your code.
+
+**It may break.** It relies on how Claude Code works today, and has been tested on version 2.1.292. It may stop working after a future update if Anthropic changes things.
+
+This is an independent, unofficial project. It is not affiliated with, endorsed by or supported by Anthropic.
