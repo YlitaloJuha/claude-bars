@@ -83,6 +83,10 @@ claude --plugin-dir .
 - The idea of a usage band above the prompt, and the way Compact gets its own dispatch, come from [skins](https://github.com/hellosverre/claude-skins) by hellosverre (MIT).
 - The list of prompt origins no person sent comes from [cache-tax](https://github.com/karanb192/cache-tax) by Karan Bansal (MIT).
 
+## Try other mods together
+
+This mod works on its own, and it also works side by side with my other Claude Code mods. See [the full list on my profile](https://github.com/YlitaloJuha/YlitaloJuha#claude-code-mods).
+
 ## License and warranty
 
 [MIT](LICENSE). `THIRD_PARTY_LICENSES.md` covers the parts that came from other projects.
