@@ -1,0 +1,14 @@
+{
+  "name": "claude-bars",
+  "owner": {
+    "name": "Juha Ylitalo",
+    "url": "https://github.com/YlitaloJuha"
+  },
+  "plugins": [
+    {
+      "name": "bars",
+      "source": "./",
+      "description": "Your context and plan limits as one quiet line, with a thin bar for every subagent."
+    }
+  ]
+}
