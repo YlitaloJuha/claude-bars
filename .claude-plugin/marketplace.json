@@ -1,6 +1,6 @@
 {
   "name": "claude-bars",
-  "description": "Your context and plan limits as one quiet line, with every subagent and background task and how long each has been running.",
+  "description": "Your context and plan limits as one quiet line, with every subagent, test run and background task and how long each has been running.",
   "owner": {
     "name": "Juha Ylitalo",
     "url": "https://github.com/YlitaloJuha"
@@ -9,7 +9,7 @@
     {
       "name": "bars",
       "source": "./",
-      "description": "Your context and plan limits as one quiet line, with every subagent and background task and how long each has been running."
+      "description": "Your context and plan limits as one quiet line, with every subagent, test run and background task and how long each has been running."
     }
   ]
 }

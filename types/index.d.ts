@@ -1,4 +1,4 @@
-export type Meter = { label: string; percent: number }
+export type Meter = { label: string; percent: number; tokens?: number }
 
 export type Minibar = {
   label: string
@@ -11,6 +11,16 @@ export type Minibar = {
 export type BackgroundTask = {
   label: string
   startedAt: number
+}
+
+export type TestRun = {
+  label: string
+  status: 'running' | 'passed' | 'failed' | 'stopped' | 'ended'
+  startedAt: number
+  endedAt?: number
+  isBackground?: boolean
+  hidesExit?: boolean
+  isScanned?: boolean
 }
 
 declare module 'claude-code' {
@@ -26,6 +36,7 @@ declare module 'claude-code' {
       meters: Meter[]
       agents: Record<string, Minibar>
       tasks: Record<string, BackgroundTask>
+      tests: Record<string, TestRun>
       clockNow: number
       isCompacting: boolean
       isAfkMenuOpen: boolean

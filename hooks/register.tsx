@@ -1,12 +1,14 @@
 // One quiet line above the prompt: thin bars for the context window and plan limits,
 // then the controls of the afk, wrap-up and todos mods, for those installed. Below it,
-// each subagent and background task with its running time. The engine reports no
-// percent-done for an agent, so its bar shows activity: it grows with tool calls and
-// fills when the agent ends.
+// each subagent, test run and background task with its running time. The engine reports
+// no percent-done for an agent, so its bar shows activity: it grows with tool calls and
+// fills when the agent ends. A test run is known by its command, from its tool call or,
+// outside this session, from `ps`. It shows no count: the engine hands a mod a command's
+// output only once it has ended.
 import { atom, read, update } from 'claude-code'
-import type { ElementTable, EngineInterface, Register, RenderSurface, SessionContextUsage, SessionRateLimit } from 'claude-code'
+import type { Color, ElementTable, EngineInterface, Register, RenderSurface, SessionContextUsage, SessionRateLimit, ToolCallResult } from 'claude-code'
 
-import type { BackgroundTask, Meter, Minibar } from '../types'
+import type { BackgroundTask, Meter, Minibar, TestRun } from '../types'
 
 const CELLS = 8
 const BAR_WIDTH = 56
@@ -18,6 +20,8 @@ const MAX_ROWS = 4
 const TICK_MS = 1000
 const MAX_LABEL = 70
 const COMPACT_FROM_PERCENT = 70
+// Past roughly this many tokens the model decides worse, whatever the window's size.
+const SMART_ZONE_TOKENS = 100_000
 const RECONCILE_MS = 10_000
 const LIMIT_LABELS: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: 'spend' }
 const LIVE = new Set(['pending', 'running', 'waiting', 'idle'])
@@ -25,16 +29,41 @@ const AFK_MODES = ['off', 'develop', 'test', 'refactor', 'housekeeping'] as cons
 // Prompts no person sent, so they do not start a fresh list of agents.
 const UNATTENDED = new Set(['plugin', 'task-notification', 'scheduled-trigger', 'peer', 'peer-send-message', 'projects-relay', 'coordinator', 'observer', 'observer-activity'])
 
+const TEST_RUNNERS = /^(?:pytest|py\.test|tox|nox|unittest|nose2|jest|vitest|mocha|ava|karma|cypress|rspec|phpunit|pest|ctest|nextest|gotestsum|behave|bats)$/
+// `test`, `test:unit`, `unit-test`, and `t` for `npm t`.
+const TEST_TARGETS = /^(?:t|(?:[\w.-]+[:_-])?(?:tests?|specs?)(?:[:_-][\w.:-]+)?)$/
+// `./test`, `bin/test`, `run-tests.sh`, `test_api.py`, `tests/smoke.py`.
+const TEST_SCRIPTS = /(?:^|[-_./])tests?(?:[-_./]\S*)?$/
+// Tools with a test target of their own, and the ones that run what their arguments name.
+const TEST_TOOLS = String.raw`npm|yarn|pnpm|bun|deno|manage\.py|cargo|go|swift|xcodebuild|mvn|mvnw|gradle|gradlew|dotnet|make|just|task|rake|rails|mix|flutter|dart|nx|turbo|zig|sbt|lein|composer|bazel|playwright`
+const TEST_HOSTS = new RegExp(String.raw`^(?:${TEST_TOOLS}|npx|bunx|pnpx|uvx|uv|poetry|pipenv|pdm|hatch|rye|bundle|python\d*(?:\.\d+)*|node|ruby|php|perl|bash|sh|zsh|tsx|ts-node|claude|docker|podman|env|time|timeout|nice|sudo|command|exec)$`)
+// A process has lost its quotes, so a process takes this narrower reading.
+const PROCESS_TOOLS = new RegExp(`^(?:${TEST_TOOLS})$`)
+const INTERPRETERS = /^(?:node|python\d*(?:\.\d+)*|ruby|php|perl)$/i
+const WATCHING = /\s--watch(?:All)?\b/
+const PS_ARGV = ['ps', '-Aww', '-o', 'pid=', '-o', 'ppid=', '-o', 'etime=', '-o', 'command=']
+const SCAN_MS = 10_000
+// What such a tool does when it only installs or lists a test tool.
+const TEST_INSTALLS = /^(?:add|install|i|ci|remove|rm|uninstall|update|upgrade|audit|why|ls|list|info|view|outdated|link|publish|init|new|create|pull|push|get|mod|doc|fmt|vet|pip|venv|stop|start|logs|kill)$/
+const NOT_A_RUN = /\s--(?:version|help|dry-run|collect-only)\b/
+const LEADING_SHELL = /^(?:(?:[({]|(?:do|then|else)\s|\w+=\S*\s)\s*)+/
+const SAYS_FAILED = /\b[1-9]\d*\s+(?:tests?\s+)?(?:failed|failing|fail|failures?|errors?)\b|^FAIL(?:ED)?\b|^not ok\b/m
+const SAYS_PASSED = /\b[1-9]\d*\s+(?:tests?\s+)?(?:passed|passing|pass)\b|^ok\b/im
+
 const ICONS = {
-  task: { text: '>_', svg: '<rect x="1" y="1" width="12" height="12" rx="3"/><path d="M4 5l2 2-2 2M7.5 9.5H10"/>' },
-  agent: { text: '◈', svg: '<rect x="2" y="4" width="10" height="8" rx="2"/><path d="M7 1v3M5 8v.5M9 8v.5"/>' },
+  task: { text: '>_', alt: 'Background task', svg: '<rect x="1" y="1" width="12" height="12" rx="3"/><path d="M4 5l2 2-2 2M7.5 9.5H10"/>' },
+  agent: { text: '◈', alt: 'Agent', svg: '<rect x="2" y="4" width="10" height="8" rx="2"/><path d="M7 1v3M5 8v.5M9 8v.5"/>' },
+  test: { text: '◎', alt: 'Test run', svg: '<path d="M5.5 1.5h3M6 1.5v4.2L2.9 11a1 1 0 0 0 .9 1.5h6.4a1 1 0 0 0 .9-1.5L8 5.7V1.5M4.4 9h5.2"/>' },
 }
 
-const COLORS = { track: '#8a8f9e40', quiet: '#8a8f9e', warning: '#d9a441', error: '#d9625b', done: '#7fb58a' }
+const COLORS = { track: '#8a8f9e40', quiet: '#8a8f9e', warning: '#d9a441', error: '#d9625b', done: '#7fb58a', smart: '#7fb58a', pastSmart: '#e8703a' }
+
+type Proc = { pid: number; ppid: number; elapsedMs: number; command: string }
 
 const meters = atom({ plugin: 'bars', key: 'meters' } as const, [] as Meter[])
 const agents = atom({ plugin: 'bars', key: 'agents' } as const, {} as Record<string, Minibar>)
 const tasks = atom({ plugin: 'bars', key: 'tasks' } as const, {} as Record<string, BackgroundTask>)
+const tests = atom({ plugin: 'bars', key: 'tests' } as const, {} as Record<string, TestRun>)
 const clockNow = atom({ plugin: 'bars', key: 'clockNow' } as const, 0)
 const isCompacting = atom({ plugin: 'bars', key: 'isCompacting' } as const, false)
 const isAfkMenuOpen = atom({ plugin: 'bars', key: 'isAfkMenuOpen' } as const, false)
@@ -80,8 +109,106 @@ export function backgroundId(result: unknown): string | undefined {
   return typeof id === 'string' && id !== '' ? id : undefined
 }
 
+const baseName = (word: string) => (word.split('/').pop() ?? '').replace(/\.[cm]?js$/, '')
+
+// Quotes are blanked, so a commit message or a search pattern never reads as a command.
+const unquoted = (command: string) => command.replace(/"[^"]*"|'[^']*'/g, '""')
+
+/** Whether a shell command runs tests: a runner by name, a tool's test target or a test script. */
+export function isTestCommand(command: string): boolean {
+  const plain = unquoted(command)
+  if (NOT_A_RUN.test(plain)) return false
+  return plain.split(/[;|&\n)}]/).some(part => {
+    const [first = '', ...rest] = part.trim().replace(LEADING_SHELL, '').split(/\s+/)
+    const tool = first.split('/').pop() ?? ''
+    if (TEST_RUNNERS.test(tool)) return true
+    // A bare `test` is the shell's own condition.
+    if (!TEST_HOSTS.test(tool)) return first !== 'test' && TEST_SCRIPTS.test(first)
+    const args = rest.filter(word => word === '--test' || !/^[-\d]/.test(word))
+    if (TEST_INSTALLS.test(args[0] ?? '')) return false
+    return TEST_SCRIPTS.test(args[0] ?? '') || args.some(word => word === '--test' || TEST_TARGETS.test(word) || TEST_RUNNERS.test(baseName(word)))
+  })
+}
+
+/** The words a process runs, without the interpreter: `node /x/.bin/jest -i` is `/x/.bin/jest -i`. */
+function processWords(command: string): string[] {
+  const [first = '', ...rest] = command.trim().split(/\s+/)
+  return INTERPRETERS.test(baseName(first)) ? rest : [first, ...rest]
+}
+
+/** Whether a running process is a test run. Stays narrow: it reads every process on the machine. */
+export function isTestProcess(command: string): boolean {
+  if (WATCHING.test(command) || NOT_A_RUN.test(command)) return false
+  const words = processWords(command).filter(word => !word.startsWith('-'))
+  const [tool = '', next = '', after = ''] = words.map(baseName)
+  if (TEST_RUNNERS.test(tool)) return true
+  if (tool === 'claude') return next === 'plugin' && after === 'test'
+  if (!PROCESS_TOOLS.test(tool) || TEST_INSTALLS.test(next)) return false
+  const target = /^(?:run|exec|x)$/.test(next) ? after : next
+  return TEST_TARGETS.test(target) || TEST_RUNNERS.test(target) || TEST_TARGETS.test(words.at(-1) ?? '')
+}
+
+/** A process's command as a row shows it: `pytest -q`, with no paths or interpreter. */
+export function processLabel(command: string): string {
+  const words = command.trim().split(/\s+/)
+  // `python3 -m pytest` keeps its interpreter, or it would read as `-m pytest`.
+  const shown = INTERPRETERS.test(baseName(words[0] ?? '')) && !(words[1] ?? '-').startsWith('-') ? words.slice(1) : words
+  return [baseName(shown[0] ?? ''), ...shown.slice(1)].join(' ').slice(0, MAX_LABEL)
+}
+
+/** Time from `ps` as milliseconds: `[[dd-]hh:]mm:ss`. */
+export function etimeMs(text: string): number {
+  const [days, clock] = text.includes('-') ? text.split('-') : ['0', text]
+  return (Number(days) * 86_400 + (clock ?? '').split(':').reduce((sum, part) => sum * 60 + Number(part), 0)) * 1000
+}
+
+export function parseProcesses(stdout: string): Proc[] {
+  return stdout.split('\n').flatMap(line => {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/.exec(line)
+    return m === null ? [] : [{ pid: Number(m[1]), ppid: Number(m[2]), elapsedMs: etimeMs(m[3] ?? ''), command: m[4] ?? '' }]
+  })
+}
+
+/**
+ * The test runs no tool call has a row for. While one has, what runs beneath the engine is
+ * left to it; otherwise a script Claude ran may hide a runner. `npm test` over `jest` is
+ * one run, so it is the topmost that counts.
+ */
+export function untrackedTestRuns(processes: readonly Proc[], enginePid: number, isTracking: boolean): Proc[] {
+  const byPid = new Map(processes.map(p => [p.pid, p]))
+  const ancestors = (p: Proc) => {
+    const chain: Proc[] = []
+    for (let up = byPid.get(p.ppid); up !== undefined && chain.length < 64; up = byPid.get(up.ppid)) chain.push(up)
+    return chain
+  }
+  return processes.filter(p => isTestProcess(p.command) && !ancestors(p).some(up => (isTracking && up.pid === enginePid) || isTestProcess(up.command)))
+}
+
+/** Whether a pipe or a `;` keeps the runner's exit code from being the command's. */
+export const hidesExit = (command: string) => /[|;\n]/.test(unquoted(command))
+
+/** How a command that ran in the foreground ended. With its exit code hidden, its output decides. */
+export function testVerdict(exitHidden: boolean | undefined, isError: boolean, text: string): TestRun['status'] {
+  if (isError) return /^Exit code \d/.test(text) ? 'failed' : 'stopped'
+  if (!exitHidden) return 'passed'
+  if (SAYS_FAILED.test(text)) return 'failed'
+  return SAYS_PASSED.test(text) ? 'passed' : 'ended'
+}
+
+/** How a background command ended, from its notification's status. */
+export function backgroundVerdict(exitHidden: boolean | undefined, status: string | undefined): TestRun['status'] {
+  if (status === 'failed') return 'failed'
+  if (status === 'killed') return 'stopped'
+  return status === 'completed' && !exitHidden ? 'passed' : 'ended'
+}
+
+/** The status a notification gives for each task it reports on. */
+export function notifiedStatuses(text: string): Record<string, string> {
+  return Object.fromEntries([...text.matchAll(/<task-id>([^<]+)<\/task-id>(?:(?!<task-id>)[\s\S])*?<status>([^<]+)<\/status>/g)].map(m => [m[1] ?? '', m[2] ?? '']))
+}
+
 export function metersOf(context: SessionContextUsage, limits: readonly SessionRateLimit[]): Meter[] {
-  const rows = context.percent === undefined ? [] : [{ label: 'context', percent: context.percent }]
+  const rows = context.percent === undefined ? [] : [{ label: 'context', percent: context.percent, tokens: context.tokens ?? Math.round((context.window * context.percent) / 100) }]
   return [...rows, ...limits.map(l => ({ label: LIMIT_LABELS[l.kind] ?? l.kind, percent: Math.round(l.percentUsed) }))]
 }
 
@@ -89,11 +216,20 @@ export function miniFraction(agent: Minibar): number {
   return agent.status === 'running' ? Math.min(MAX_RUNNING_FILL, agent.tools / TOOLS_FOR_FULL_BAR) : 1
 }
 
-const meterColor = (percent: number) => (percent >= 90 ? COLORS.error : percent >= COMPACT_FROM_PERCENT ? COLORS.warning : COLORS.quiet)
-const meterTheme = (percent: number) => (percent >= 90 ? 'error' : percent >= COMPACT_FROM_PERCENT ? 'warning' : undefined)
+// Only the context meter has tokens: it shows the zone the model does its best work in.
+export const meterColor = (m: Meter) =>
+  m.percent >= 90 ? COLORS.error
+  : m.tokens !== undefined ? (m.tokens < SMART_ZONE_TOKENS ? COLORS.smart : COLORS.pastSmart)
+  : m.percent >= COMPACT_FROM_PERCENT ? COLORS.warning
+  : COLORS.quiet
+const meterTheme = (m: Meter): Color | undefined =>
+  m.percent >= 90 ? 'error'
+  : m.tokens !== undefined ? (m.tokens < SMART_ZONE_TOKENS ? 'success' : COLORS.pastSmart)
+  : m.percent >= COMPACT_FROM_PERCENT ? 'warning'
+  : undefined
 const miniColor = (agent: Minibar) => (agent.status === 'failed' ? COLORS.error : agent.status === 'done' ? COLORS.done : COLORS.quiet)
 
-function drawBar(ui: ElementTable, surface: RenderSurface, fraction: number, width: number, cells: number, color: string, theme: 'error' | 'warning' | 'success' | undefined, alt: string) {
+function drawBar(ui: ElementTable, surface: RenderSurface, fraction: number, width: number, cells: number, color: string, theme: Color | undefined, alt: string) {
   if (surface === 'terminal') {
     const { filled, empty } = textBar(fraction, cells)
     return (
@@ -112,12 +248,12 @@ function drawIcon(ui: ElementTable, surface: RenderSurface, kind: keyof typeof I
   const { Svg, Text } = ui as ElementTable & { Svg?: ElementTable['Text'] }
   if (surface === 'terminal' || Svg === undefined) return <Text dimColor>{ICONS[kind].text}</Text>
   const source = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" stroke="${COLORS.quiet}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${ICONS[kind].svg}</svg>`
-  return (Svg as never as (props: Record<string, unknown>) => ReturnType<ElementTable['Text']>)({ source, width: 14, height: 14, alt: kind === 'task' ? 'Background task' : 'Agent' })
+  return (Svg as never as (props: Record<string, unknown>) => ReturnType<ElementTable['Text']>)({ source, width: 14, height: 14, alt: ICONS[kind].alt })
 }
 
 // Redraws the running times while anything is running.
 async function tick($: EngineInterface) {
-  const running = Object.keys(await read($, tasks)).length > 0 || Object.values(await read($, agents)).some(a => a.status === 'running')
+  const running = Object.keys(await read($, tasks)).length > 0 || Object.values(await read($, agents)).some(a => a.status === 'running') || Object.values(await read($, tests)).some(t => t.status === 'running')
   if (running) {
     const now = await $.clock.now()
     await update($, clockNow, () => now)
@@ -163,12 +299,70 @@ async function chooseAfk($: EngineInterface, mode: (typeof AFK_MODES)[number]) {
   await $.afk.choose({ mode })
 }
 
+// No hook sees a run outside this session, so `ps` is the only sign of it. Its exit code
+// never reaches here, so such a run can only end as `ended`.
+async function scanProcesses($: EngineInterface, enginePid: number) {
+  const { exitCode, stdout } = await $.process.run(PS_ARGV)
+  if (exitCode !== 0) return
+  const known = await read($, tests)
+  const isTracking = Object.values(known).some(run => run.isScanned !== true && run.status === 'running')
+  const seen = new Map(untrackedTestRuns(parseProcesses(stdout), enginePid, isTracking).map(p => [`pid:${p.pid}`, p]))
+  const isGone = (id: string, run: TestRun) => run.isScanned === true && run.status === 'running' && !seen.has(id)
+  const isChanged = Object.entries(known).some(([id, run]) => isGone(id, run)) || [...seen.keys()].some(id => known[id]?.status !== 'running')
+  if (!isChanged) return
+  const now = await $.clock.now()
+  await update($, tests, current => {
+    const next = { ...current }
+    for (const [id, run] of Object.entries(current)) if (isGone(id, run)) next[id] = { ...run, status: 'ended', endedAt: now }
+    for (const [id, p] of seen) {
+      if (current[id]?.status !== 'running') next[id] = { label: processLabel(p.command), status: 'running', startedAt: now - p.elapsedMs, isScanned: true }
+    }
+    return next
+  })
+}
+
+// The parent of what the engine starts is the engine, and all it runs sits beneath that.
+async function startScan($: EngineInterface) {
+  const { stdout } = await $.process.run(['sh', '-c', 'echo $PPID'])
+  const enginePid = Number(stdout.trim())
+  const timer = $.clock.every(SCAN_MS, () => {
+    scanProcesses($, enginePid).catch(() => timer.cancel())
+  })
+}
+
+const labelOf = (e: { tool: string }) => {
+  const input = e as { description?: unknown; command?: unknown }
+  return String(input.description ?? input.command ?? e.tool).split('\n')[0]?.slice(0, MAX_LABEL) ?? e.tool
+}
+
+async function endTest($: EngineInterface, id: string, status: TestRun['status']) {
+  const endedAt = await $.clock.now()
+  await update($, tests, current => {
+    const run = current[id]
+    return run === undefined ? current : { ...current, [id]: { ...run, status, endedAt } }
+  })
+}
+
+// A refused call drops its row; one that went to the background goes on under its task's id.
+async function settleTest($: EngineInterface, id: string, result: ToolCallResult, taskId: string | undefined) {
+  const endedAt = await $.clock.now()
+  await update($, tests, current => {
+    const { [id]: run, ...rest } = current
+    if (run === undefined) return current
+    if (result.deny !== undefined) return rest
+    if (taskId !== undefined) return { ...rest, [taskId]: { ...run, isBackground: true } }
+    return { ...current, [id]: { ...run, status: testVerdict(run.hidesExit, result.isError === true, result.text ?? ''), endedAt } }
+  })
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await refreshMeters($)
     $.clock.every(RECONCILE_MS, () => reconcile($))
     $.clock.every(TICK_MS, () => tick($))
+    // Where there is no `sh` or `ps`, there is no scan.
+    await startScan($).catch(() => undefined)
     // Also how the other mods tell that this line is here to hold their controls.
     await $.command.register({ name: 'bars', description: 'Show your context and plan limits', immediate: true })
     return result
@@ -188,6 +382,7 @@ export const register: Register = on => {
     if (e.reason === 'clear' || e.reason === 'resume') {
       await update($, agents, () => ({}))
       await update($, tasks, () => ({}))
+      await update($, tests, () => ({}))
     }
     return next(e)
   })
@@ -210,17 +405,26 @@ export const register: Register = on => {
         return agent === undefined ? current : { ...current, [id]: { ...agent, tools: agent.tools + 1 } }
       })
     }
-    const result = await next(e)
-    const started = result.deny === undefined ? backgroundId(result.result) : undefined
-    if (started !== undefined) {
-      const input = e as { description?: unknown; command?: unknown }
-      const label = String(input.description ?? input.command ?? e.tool).split('\n')[0]?.slice(0, MAX_LABEL) ?? e.tool
+    const testCommand = e.tool === 'Bash' && isTestCommand(e.command) ? e.command : undefined
+    if (testCommand !== undefined) {
       const startedAt = await $.clock.now()
-      await update($, tasks, current => ({ ...current, [started]: { label, startedAt } }))
+      await update($, tests, current => ({ ...current, [e.tool_use_id]: { label: labelOf(e), status: 'running', startedAt, hidesExit: hidesExit(testCommand) } }))
+    }
+    const result = await next(e).catch(async (error: unknown) => {
+      await endTest($, e.tool_use_id, 'stopped')
+      throw error
+    })
+    const started = result.deny === undefined ? backgroundId(result.result) : undefined
+    if (testCommand !== undefined) {
+      await settleTest($, e.tool_use_id, result, started)
+    } else if (started !== undefined) {
+      const startedAt = await $.clock.now()
+      await update($, tasks, current => ({ ...current, [started]: { label: labelOf(e), startedAt } }))
     }
     if (e.tool === 'TaskStop') {
       const stopped = String((e as { task_id?: unknown; shell_id?: unknown }).task_id ?? (e as { shell_id?: unknown }).shell_id ?? '')
       await update($, tasks, current => Object.fromEntries(Object.entries(current).filter(([id]) => id !== stopped)))
+      await endTest($, stopped, 'stopped')
     }
     return result
   })
@@ -232,6 +436,10 @@ export const register: Register = on => {
     if (Array.isArray(running)) {
       const ids = new Set(running.map(t => t.id))
       await update($, tasks, current => Object.fromEntries(Object.entries(current).filter(([id]) => ids.has(id))))
+      const endedAt = await $.clock.now()
+      await update($, tests, current =>
+        Object.fromEntries(Object.entries(current).map(([id, run]) => [id, run.isBackground && run.status === 'running' && !ids.has(id) ? { ...run, status: 'ended' as const, endedAt } : run])),
+      )
     }
     return result
   })
@@ -258,10 +466,19 @@ export const register: Register = on => {
     if (e.origin.kind === 'task-notification') {
       const ended = new Set(notifiedIds(e.text))
       await update($, tasks, current => Object.fromEntries(Object.entries(current).filter(([id]) => !ended.has(id))))
+      const statuses = notifiedStatuses(e.text)
+      const now = await $.clock.now()
+      // A notification can come after Stop has already settled the run, and it knows better.
+      await update($, tests, current =>
+        Object.fromEntries(Object.entries(current).map(([id, run]) => [id, ended.has(id) ? { ...run, status: backgroundVerdict(run.hidesExit, statuses[id]), endedAt: run.endedAt ?? now } : run])),
+      )
     }
     if (!UNATTENDED.has(e.origin.kind)) {
       await update($, agents, current =>
         Object.fromEntries(Object.entries(current).filter(([, agent]) => agent.status === 'running')),
+      )
+      await update($, tests, current =>
+        Object.fromEntries(Object.entries(current).filter(([, run]) => run.status === 'running')),
       )
     }
     return next(e)
@@ -288,11 +505,18 @@ export const register: Register = on => {
     const { Box, Button, Text } = ui
     const now = Math.max(await read($, clockNow), await $.clock.now())
     const running = Object.entries(await read($, tasks))
+    const testRuns = Object.entries(await read($, tests))
     const agentRow = ([id, agent]: [string, Minibar]) => (
       <Box key={id} flexDirection="row" alignItems="center" gap={1}>
         {drawIcon(ui, e.surface, 'agent')}
         {drawBar(ui, e.surface, miniFraction(agent), MINI_WIDTH, CELLS / 2, miniColor(agent), agent.status === 'failed' ? 'error' : agent.status === 'done' ? 'success' : undefined, `${agent.label}: ${agent.status}`)}
         <Text dimColor wrap="truncate-end">{`${agent.label} · ${agent.status === 'running' ? `${agent.tools} ${agent.tools === 1 ? 'tool' : 'tools'}` : agent.status} · ${elapsed((agent.endedAt ?? now) - agent.startedAt)}`}</Text>
+      </Box>
+    )
+    const testRow = ([id, run]: [string, TestRun]) => (
+      <Box key={id} flexDirection="row" alignItems="center" gap={1}>
+        {drawIcon(ui, e.surface, 'test')}
+        <Text color={run.status === 'failed' ? 'error' : undefined} dimColor={run.status !== 'failed'} wrap="truncate-end">{`${run.label} · ${run.status === 'running' ? '' : `${run.status} · `}${elapsed((run.endedAt ?? now) - run.startedAt)}`}</Text>
       </Box>
     )
     const taskRow = ([id, task]: [string, BackgroundTask]) => (
@@ -318,7 +542,7 @@ export const register: Register = on => {
           <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={2}>
             {rows.map(m => (
               <Box key={m.label} flexDirection="row" alignItems="center" gap={1}>
-                {drawBar(ui, e.surface, m.percent / 100, BAR_WIDTH, CELLS, meterColor(m.percent), meterTheme(m.percent), `${m.percent}% ${m.label}`)}
+                {drawBar(ui, e.surface, m.percent / 100, BAR_WIDTH, CELLS, meterColor(m), meterTheme(m), `${m.percent}% ${m.label}`)}
                 <Text dimColor>{`${m.percent}% ${m.label}`}</Text>
               </Box>
             ))}
@@ -341,6 +565,7 @@ export const register: Register = on => {
           </Box>
         )}
         {minis.length > 0 && listed('agents', minis, agentRow)}
+        {testRuns.length > 0 && listed('tests', testRuns, testRow)}
         {running.length > 0 && listed('tasks', running, taskRow)}
         {rest}
       </Box>

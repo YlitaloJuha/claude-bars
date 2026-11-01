@@ -1,11 +1,11 @@
 <h1 align="center">claude-bars</h1>
 
-<p align="center"><b>Your context and plan limits as one quiet line, with every subagent and background task and how long each has been running.</b></p>
+<p align="center"><b>Your context and plan limits as one quiet line, with every subagent, test run and background task and how long each has been running.</b></p>
 
 <p align="center">
   <img alt="type: Claude Code mod" src="https://img.shields.io/badge/type-Claude%20Code%20mod-6f42c1?style=flat-square">
   <img alt="tested on: Claude Code 2.1.309" src="https://img.shields.io/badge/tested%20on-Claude%20Code%202.1.309-D97757?style=flat-square">
-  <img alt="tests: 31 passing" src="https://img.shields.io/badge/tests-31%20passing-2ea44f?style=flat-square">
+  <img alt="tests: 184 passing" src="https://img.shields.io/badge/tests-184%20passing-2ea44f?style=flat-square">
   <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-555?style=flat-square">
 </p>
 
@@ -33,7 +33,10 @@ In the desktop app, click + next to the prompt box, then Plugins, Add marketplac
 
 ## What it does
 
-- **Context and limits:** Context window, 5-hour and 7-day limits as thin bars. They only change colour from 70% used.
+- **Context and limits:** Context window, 5-hour and 7-day limits as thin bars. The limit bars only change colour from 70% used.
+- **Smart zone:** The context bar is green up to 100k tokens, where the model does its best work, and orange-red past it, whatever the window's size. It turns red at 90% of the window.
+- **Test runs:** Each test run Claude starts, in the foreground or background, with its description and a counting timer. It ends as `passed`, `failed`, `stopped` or `ended`, and clears on your next message.
+- **Test runs elsewhere:** A process scan every 10 seconds finds runs outside this session, such as in your terminal or another Claude session. They show their command and true running time, and end as `ended`, since their exit code can't be read.
 - **Background tasks:** Each background command with a terminal icon, its description and a counting timer. It leaves the list when it ends.
 - **Agents:** Each subagent with an icon, a thin bar, its task, tool count and running time. The bar fills when the agent ends.
 - **Stays small:** The newest four of each show. Older ones fold under `+2 more` and open when you hover over the list.
@@ -56,12 +59,18 @@ None. It makes no model calls.
 
 ## What it can reach
 
-No network, no shell commands and no file access through the mod API. It reads usage and the subagent list from Claude Code, and runs `/compact` only when you press the button. Run `claude plugin validate .` in this repository to list every call it makes.
+No network and no file access through the mod API. It runs two commands: `ps` every 10 seconds, and `sh -c 'echo $PPID'` once at the start to tell this session's runs from the rest. `ps` lists the command line of every process on your machine. The mod keeps only the ones it reads as test runs, in this session's state, and sends them nowhere. It reads usage and the subagent list from Claude Code, and runs `/compact` only when you press the button. Run `claude plugin validate .` in this repository to list every call it makes.
 
 ## Limits
 
 - Claude Code reports no percent-done for an agent, so a subagent bar shows activity: it grows with tool calls up to 90%, then fills when the agent ends.
-- It sees this session only. Separate sessions you start from the app are not listed.
+- Agents and background tasks are this session's only. From separate sessions, only test runs are listed.
+- A test run Claude starts is recognised from its Bash command: common runners, a tool's `test` target, or a script named for tests. A command that doesn't read as one, such as `./ci.sh` or `sh -c "pytest"`, can still show through the scan if it starts a known runner, but with no verdict.
+- The process scan is narrower, as it reads every process on the machine: it looks for known runners and tools' `test` targets, on this machine only. A script named for tests shows only if it starts a known runner. It skips `--watch` modes and runs inside containers, and misses a runner whose path has a space in it.
+- The scan can miss a run shorter than 10 seconds, and a scanned run's end can show up to 10 seconds late.
+- A test row shows no pass count or live progress, since a mod only gets a command's output once it has ended. Its clock starts when Claude asks to run the command, so it includes any wait for your approval. A background run's clock stops when Claude Code reports its end, which can be a little later than the end itself.
+- A pipe or `;` hides the runner's exit code. A foreground run then takes its verdict from its output. A background run shows `ended` unless it reports a failure.
+- The 100k line is a rule of thumb, not something Claude Code measures.
 - The hover list has only been checked in tests, and it needs a pointer: where there is none, the older rows stay folded.
 - Tasks are known from the moment they start in this session, so ones started before a resume are not listed.
 - If you use the `skins` mod, run `/skin band off` so its rings do not show as well.

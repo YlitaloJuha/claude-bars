@@ -1,7 +1,7 @@
 {
   "name": "bars",
   "version": "0.1.0",
-  "description": "Your context and plan limits as one quiet line, with every subagent and background task and how long each has been running.",
+  "description": "Your context and plan limits as one quiet line, with every subagent, test run and background task and how long each has been running.",
   "author": {
     "name": "Juha Ylitalo",
     "url": "https://github.com/YlitaloJuha"
