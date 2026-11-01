@@ -1,4 +1,9 @@
-export type Meter = { label: string; percent: number; tokens?: number }
+export type Meter = { label: string; percent: number; tokens?: number; scale?: number }
+
+export type ContextBreakdown = {
+  scale: number
+  rows: Array<{ name: string; tokens: number; kind: 'used' | 'free' | 'buffer' }>
+}
 
 export type Minibar = {
   label: string
@@ -34,6 +39,7 @@ declare module 'claude-code' {
   interface PluginState {
     bars: {
       meters: Meter[]
+      breakdown: ContextBreakdown | null
       agents: Record<string, Minibar>
       tasks: Record<string, BackgroundTask>
       tests: Record<string, TestRun>

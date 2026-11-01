@@ -5,7 +5,7 @@
 <p align="center">
   <img alt="type: Claude Code mod" src="https://img.shields.io/badge/type-Claude%20Code%20mod-6f42c1?style=flat-square">
   <img alt="tested on: Claude Code 2.1.309" src="https://img.shields.io/badge/tested%20on-Claude%20Code%202.1.309-D97757?style=flat-square">
-  <img alt="tests: 184 passing" src="https://img.shields.io/badge/tests-184%20passing-2ea44f?style=flat-square">
+  <img alt="tests: 205 passing" src="https://img.shields.io/badge/tests-205%20passing-2ea44f?style=flat-square">
   <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-555?style=flat-square">
 </p>
 
@@ -33,13 +33,14 @@ In the desktop app, click + next to the prompt box, then Plugins, Add marketplac
 
 ## What it does
 
-- **Context and limits:** Context window, 5-hour and 7-day limits as thin bars. The limit bars only change colour from 70% used.
-- **Smart zone:** The context bar is green up to 100k tokens, where the model does its best work, and orange-red past it, whatever the window's size. It turns red at 90% of the window.
+- **Context and limits:** Context window, 5-hour and 7-day limits as thin bars. In the desktop app they fill the line, and the context bar takes three times the room of each limit bar. The limit bars only change colour from 70% used.
+- **Context parts:** In the desktop app the context bar shows what fills it, grouped as Claude's Context panel groups it: the three largest parts in colour, the rest in grey, and the compaction reserve at the end. Hovering over it lists every part with its tokens and share. Its percent is of the window compaction runs at, as in that panel, so it can read higher than the model's own window would.
+- **Smart zone:** A line under the context bar marks the first 100k tokens, where the model does its best work, whatever the window's size. The line is always green. The terminal has no line, and colours the bar itself: green inside that range, orange-red past it, and red at 90% of the window. The `N% context` text turns yellow from 30% and red from 60%.
 - **Test runs:** Each test run Claude starts, in the foreground or background, with its description and a counting timer. It ends as `passed`, `failed`, `stopped` or `ended`, and clears on your next message.
 - **Test runs elsewhere:** A process scan every 10 seconds finds runs outside this session, such as in your terminal or another Claude session. They show their command and true running time, and end as `ended`, since their exit code can't be read.
 - **Background tasks:** Each background command with a terminal icon, its description and a counting timer. It leaves the list when it ends.
 - **Agents:** Each subagent with an icon, a thin bar, its task, tool count and running time. The bar fills when the agent ends.
-- **Stays small:** The newest four of each show. Older ones fold under `+2 more` and open when you hover over the list.
+- **Stays small:** The newest four of each show, next to the prompt, or fewer when the lists together would not fit. Older ones fold under `+2 more`. Hovering over that line opens them in a card above it, up to the newest 20, and moves nothing. In the desktop app the lists sit above the bars, so the card leaves the bars clear. The terminal keeps them below the bars and opens older rows in place.
 - **Compact button:** Appears on the line from 70% context, and hides while a turn runs.
 - **Works alone, shares when it can:** If you also install [`claude-afk`](https://github.com/YlitaloJuha/claude-afk), [`claude-wrap-up`](https://github.com/YlitaloJuha/claude-wrap-up) or [`claude-todos`](https://github.com/YlitaloJuha/claude-todos), they put their controls on this line instead of their own row.
 
@@ -71,7 +72,7 @@ No network and no file access through the mod API. It runs two commands: `ps` ev
 - A test row shows no pass count or live progress, since a mod only gets a command's output once it has ended. Its clock starts when Claude asks to run the command, so it includes any wait for your approval. A background run's clock stops when Claude Code reports its end, which can be a little later than the end itself.
 - A pipe or `;` hides the runner's exit code. A foreground run then takes its verdict from its output. A background run shows `ended` unless it reports a failure.
 - The 100k line is a rule of thumb, not something Claude Code measures.
-- The hover list has only been checked in tests, and it needs a pointer: where there is none, the older rows stay folded.
+- Opening older rows needs a pointer: where there is none, they stay folded. A card is narrow and cuts long rows, so its rows show how each one ended first.
 - Tasks are known from the moment they start in this session, so ones started before a resume are not listed.
 - If you use the `skins` mod, run `/skin band off` so its rings do not show as well.
 - Claude Code draws the band above the prompt only in the terminal and the desktop app, so what this mod draws there does not show in VS Code or on mobile.

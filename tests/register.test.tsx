@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, RenderPropsOf, SessionStartInput, TurnCompleteInput } from 'claude-code'
 
-import { backgroundId, backgroundVerdict, elapsed, etimeMs, hidesExit, isTestCommand, isTestProcess, meterColor, metersOf, miniFraction, notifiedIds, notifiedStatuses, parseProcesses, processLabel, svgBar, testVerdict, textBar, untrackedTestRuns } from '../hooks/register'
+import { backgroundId, backgroundVerdict, breakdownOf, contextParts, elapsed, etimeMs, hidesExit, isTestCommand, isTestProcess, meterColor, metersOf, miniFraction, notifiedIds, notifiedStatuses, parseProcesses, processLabel, rowsInView, svgBar, testVerdict, textBar, tokenText, untrackedTestRuns } from '../hooks/register'
 
 const session: SessionStartInput = { surface: 'desktop', isInteractive: true, cwd: '/work' }
 const props: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 75, scroll: { offset: 0, bodyRows: 10 }, view: {} }
@@ -15,7 +15,8 @@ const spawn = (description: string) => ({ tool_use_id: 'u' + description, prompt
 
 const ENGINE = 900
 
-function world(on: On, opts: { list?: Array<{ id: string; status: string }>; percent?: number; tokens?: number; siblings?: boolean; turnCount?: number; hold?: Promise<unknown>; ps?: () => string } = {}) {
+function world(on: On, opts: { list?: Array<{ id: string; status: string }>; percent?: number; tokens?: number; siblings?: boolean; turnCount?: number; hold?: Promise<unknown>; ps?: () => string; manyAgents?: boolean; window?: number; breakdown?: never } = {}) {
+  let agentCount = 0
   const compacted: string[] = []
   if (opts.ps !== undefined) {
     const ps = opts.ps
@@ -27,14 +28,19 @@ function world(on: On, opts: { list?: Array<{ id: string; status: string }>; per
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('session.turns', () => ({ value: opts.turnCount ?? 3 }))
-  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1000, tokens: opts.tokens ?? 680, percent: opts.percent ?? 42 }, rateLimits: LIMITS } }))
+  const breakdownsAsked: unknown[] = []
+  on('session.usage', ($, e) => {
+    if (e.breakdown !== undefined) breakdownsAsked.push(e.breakdown)
+    return { value: { startedAt: 0, context: { window: opts.window ?? 1000, tokens: opts.tokens ?? 680, percent: opts.percent ?? 42, ...(e.breakdown !== undefined && opts.breakdown !== undefined ? { breakdown: opts.breakdown } : {}) }, rateLimits: LIMITS } }
+  })
+  on('session.measure', ($, e) => ({ changed: e.changed }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('tool.call', async ($, e) => {
     await opts.hold
     return ((e as { fakeAnswer?: object }).fakeAnswer ?? { result: (e as { fakeResult?: object }).fakeResult ?? {} }) as never
   })
   on('prompt.submit', ($, e) => ({ text: e.text }))
-  on('agent.spawn', () => ({ model: 'haiku', agentId: 'A1' }))
+  on('agent.spawn', () => ({ model: 'haiku', agentId: opts.manyAgents ? 'A' + ++agentCount : 'A1' }))
   on('agent.list', () => ({ value: (opts.list ?? []) as never }))
   on('command.list', () => ({ value: (opts.siblings ? ['afk', 'wrap-up', 'todos'] : []).map(name => ({ name, description: '', source: 'plugin' as const })) }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -46,7 +52,7 @@ function world(on: On, opts: { list?: Array<{ id: string; status: string }>; per
     on('wrapUp.start' as never, (() => { wrapped.push(1); return { value: undefined } }) as never)
     on('todos.toggle' as never, (() => { toggled.push(1); return { value: undefined } }) as never)
   }
-  return { compacted, chosen, wrapped, toggled }
+  return { compacted, chosen, wrapped, toggled, breakdownsAsked }
 }
 
 test('text bars are thin lines of a fixed width', () => {
@@ -64,7 +70,7 @@ test('drawn bars have a track and a fill only when there is something to fill', 
 
 test('meters name the context and each limit', () => {
   expect(metersOf({ window: 1000, percent: 68 }, LIMITS)).toEqual([
-    { label: 'context', percent: 68, tokens: 680 },
+    { label: 'context', percent: 68, tokens: 680, scale: 1000 },
     { label: '5h', percent: 24 },
     { label: '7d', percent: 91 },
   ])
@@ -221,15 +227,113 @@ for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
   })
 }
 
-test('the desktop draws its bars, the terminal writes them', async ($, on) => {
+test('the desktop draws its bars to fill the line, the terminal writes them', async ($, on) => {
   mock.clock(on)
   world(on)
   await $.session.start(session)
   const desk = await $.ui.mount(mount)
-  expect(await desk.find({ type: 'Svg' })).toBeDefined()
+  expect(await desk.find({ type: 'Svg' })).toBeUndefined()
+  const grown = (root: unknown) => boxesIn(root as Drawn).filter(node => node.children?.some(child => typeof child !== 'string' && child.type === 'Text' && /% (?:context|5h|7d)$/.test(textsIn(child)[0] ?? '')))
+  expect(grown(await desk.drawn()).map(node => node.props?.flexGrow)).toEqual([3, 1, 1])
   await desk.unmount()
   const term = await $.ui.mount({ ...mount, surface: 'terminal' })
   expect(await term.find({ type: 'Text', text: /─/ })).toBeDefined()
+  expect(grown(await term.drawn()).map(node => node.props?.flexGrow)).toEqual([undefined, undefined, undefined])
+})
+
+const category = (name: string, tokens: number, kind: 'used' | 'free' | 'buffer' | 'deferred' = 'used') => ({ name, tokens, kind, color: 'inactive', isDeferred: kind === 'deferred' })
+// The context panel's figures for a 1M model that compacts at 500k.
+const PANEL = {
+  rawMaxTokens: 500_000,
+  categories: [
+    category('System prompt', 10_600), category('System tools', 18_100), category('MCP tools', 16_500), category('Skills', 6_500), category('MCP server instructions', 775), category('Memory files', 203), category('Custom agents', 56), category('Messages', 196_000),
+    category('Autocompact buffer', 33_000, 'buffer'), category('Free space', 218_200, 'free'), category('MCP tools (deferred)', 51_300, 'deferred'),
+  ],
+} as never
+const LIVE = { window: 1_000_000, tokens: 260_800, percent: 26 }
+
+test('a breakdown keeps what the window holds and drops what is loaded on demand', () => {
+  const known = breakdownOf(PANEL)
+  expect(known.scale).toBe(500_000)
+  expect(known.rows.map(row => row.name)).not.toContain('MCP tools (deferred)')
+})
+
+test('the context meter reads against the compaction window, as the panel does', () => {
+  expect(metersOf(LIVE, [])[0]).toEqual({ label: 'context', percent: 26, tokens: 260_800, scale: 1_000_000 })
+  expect(metersOf(LIVE, [], breakdownOf(PANEL))[0]).toEqual({ label: 'context', percent: 52, tokens: 260_800, scale: 500_000 })
+  expect(metersOf(LIVE, [], { scale: 0, rows: [] })[0]?.percent).toBe(26)
+})
+
+test('the bar groups its parts as the panel does, and the legend lists them all', () => {
+  const { filled, reserved, legend } = contextParts(breakdownOf(PANEL), 260_800)
+  expect(filled.map(p => p.name)).toEqual(['Messages', 'System tools', 'MCP tools', 'Other', 'Since last update'])
+  expect(filled[3]?.tokens).toBe(18_134)
+  expect(filled[4]?.tokens).toBe(12_066)
+  expect(reserved?.name).toBe('Autocompact buffer')
+  expect(legend.map(p => p.name)).toEqual(['Messages', 'System tools', 'MCP tools', 'System prompt', 'Skills', 'MCP server instructions', 'Memory files', 'Custom agents', 'Since last update', 'Autocompact buffer', 'Free space'])
+  expect(legend.at(-1)?.tokens).toBe(206_134)
+  expect(contextParts(breakdownOf(PANEL), 1000).filled.map(p => p.name)).not.toContain('Since last update')
+})
+
+test('tokens read as the panel writes them', () => {
+  expect(tokenText(775)).toBe('775')
+  expect(tokenText(18_100)).toBe('18.1k')
+  expect(tokenText(196_000)).toBe('196k')
+})
+
+test('the desktop bar shows the parts, the best range and a legend on hover', async ($, on) => {
+  mock.clock(on)
+  world(on, { tokens: 260_800, percent: 26, window: 1_000_000, breakdown: PANEL })
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  const root = await ui.drawn()
+  expect(await ui.find({ type: 'Text', text: /^52% context$/ })).toBeDefined()
+  const colored = boxesIn(root as never).filter(node => typeof node.props?.backgroundColor === 'string' && typeof node.props?.flexGrow === 'number').map(node => node.props?.flexGrow)
+  expect(colored).toEqual(expect.arrayContaining([3920, 362, 330, 363, 241, 660, 2000]))
+  const [legend] = opensOnHover(root)
+  expect(legend?.props?.position).toBe('absolute')
+  const texts = textsIn(legend as Drawn)
+  expect(texts[0]).toBe('52% used · 260.8k / 500k')
+  expect(texts).toContain('196k · 39.2%')
+  expect(texts).toContain('up to 100k')
+})
+
+test('the best range stays green past it', async ($, on) => {
+  mock.clock(on)
+  world(on, { tokens: 260_800, percent: 26, window: 1_000_000, breakdown: PANEL })
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  const root = await ui.drawn()
+  expect(boxesIn(root as never).some(node => node.props?.flexGrow === 2000 && node.props?.backgroundColor === '#7fb58a')).toBe(true)
+  const swatches = boxesIn(opensOnHover(root)[0] as Drawn).filter(node => node.type === 'Text' && node.children?.includes('■'))
+  expect(swatches.at(-1)?.props?.color).toBe('#7fb58a')
+})
+
+test('before any breakdown the context bar is one part in the colour of its zone', async ($, on) => {
+  mock.clock(on)
+  world(on, { tokens: 150_000, percent: 15, window: 1_000_000 })
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  const root = await ui.drawn()
+  expect(boxesIn(root as never).some(node => node.props?.flexGrow === 1500 && node.props?.backgroundColor === '#e8703a')).toBe(true)
+  expect(opensOnHover(root)).toHaveLength(0)
+})
+
+test('a run of responses asks for the breakdown only every so often', async ($, on) => {
+  const clock = mock.clock(on)
+  const w = world(on, { tokens: 260_800, percent: 26, window: 1_000_000, breakdown: PANEL })
+  await $.session.start(session)
+  await clock.advance(31_000)
+  const asked = w.breakdownsAsked.length
+  const measure = { context: LIVE, rateLimits: [], changed: ['context'] } as never
+  await $.session.measure(measure)
+  await $.session.measure(measure)
+  await clock.advance(5_000)
+  await $.session.measure(measure)
+  expect(w.breakdownsAsked.length).toBe(asked + 1)
+  await clock.advance(31_000)
+  await $.session.measure(measure)
+  expect(w.breakdownsAsked.length).toBe(asked + 2)
 })
 
 test('without the other mods there are no controls for them', async ($, on) => {
@@ -610,6 +714,129 @@ test('past four tasks the older ones fold under a count', async ($, on) => {
   for (let i = 1; i <= 6; i++) await $.tool.call(started('b' + i, 'Job ' + i))
   expect(await ui.find({ type: 'Text', text: /\+2 more/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Job 6/ })).toBeDefined()
+})
+
+type Drawn = { type: string; props?: Record<string, unknown>; hover?: Record<string, unknown>; children?: Array<Drawn | string> }
+const boxesIn = (node: Drawn | string): Drawn[] => (typeof node === 'string' ? [] : [node, ...(node.children ?? []).flatMap(boxesIn)])
+const textsIn = (node: Drawn | string): string[] => (typeof node === 'string' ? [node] : (node.children ?? []).flatMap(textsIn))
+const opensOnHover = (root: unknown) => boxesIn(root as Drawn).filter(node => node.props?.display === 'none')
+
+test('older rows open on desktop as a card over the count, moving nothing in the band', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  for (let i = 1; i <= 6; i++) await $.tool.call(started('b' + i, 'Job ' + i))
+  const root = await ui.drawn()
+  const [card] = opensOnHover(root)
+  expect(card?.props?.position).toBe('absolute')
+  expect(textsIn(card as Drawn).join('\n')).toContain('Job 2')
+  expect(textsIn(card as Drawn).join('\n')).not.toContain('Job 3')
+  const anchor = boxesIn(root as never).find(node => node.children?.includes(card as Drawn))
+  expect(anchor?.props?.key).toBe('tasks-more')
+  expect(textsIn(anchor as Drawn)[0]).toBe('+2 more')
+})
+
+test('a card shows first what a row came to, since it cuts long rows', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  for (let i = 1; i <= 6; i++) await $.tool.call(testCall({ description: 'Run ' + i, tool_use_id: 'r' + i }))
+  expect(textsIn(opensOnHover(await ui.drawn())[0] as Drawn)).toContain('passed · 0s · Run 1')
+  expect(await ui.find({ type: 'Text', text: /^Run 6 · passed/ })).toBeDefined()
+})
+
+test('a card holds the newest of the hidden rows and counts the older ones', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  for (let i = 1; i <= 30; i++) await $.tool.call(started('b' + i, 'Job ' + i))
+  const texts = textsIn(opensOnHover(await ui.drawn())[0] as Drawn)
+  expect(texts[0]).toBe('+6 older')
+  expect(texts).toHaveLength(21)
+  expect(texts.at(-1)).toContain('Job 26')
+})
+
+test('the terminal opens older rows in place, since it clips a card to the band', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start({ ...session, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...mount, surface: 'terminal' })
+  for (let i = 1; i <= 6; i++) await $.tool.call(started('b' + i, 'Job ' + i))
+  const [opened] = opensOnHover(await ui.drawn())
+  expect(opened?.props?.position).toBeUndefined()
+  expect(textsIn(opened as Drawn).join('\n')).toContain('Job 1 · ')
+})
+
+test('three full lists together fit the rows the desktop band shows', async ($, on) => {
+  mock.clock(on)
+  world(on, { manyAgents: true })
+  await $.session.start(session)
+  const ui = await $.ui.mount({ ...mount, props: { ...props, maxRows: 12, scroll: { offset: 0, bodyRows: 13 } } })
+  for (let i = 1; i <= 6; i++) {
+    await $.tool.call(started('b' + i, 'Job ' + i))
+    await $.tool.call(testCall({ description: 'Run ' + i, tool_use_id: 'r' + i }))
+    await $.agent.spawn(spawn('Agent ' + i))
+  }
+  const root = await ui.drawn()
+  const hidden = opensOnHover(root).flatMap(textsIn)
+  const shown = textsIn(root as never).filter(text => !hidden.includes(text))
+  expect(shown.filter(text => /\+\d+ more/.test(text))).toHaveLength(3)
+  expect(shown.filter(text => /^(?:Job|Run|Agent) \d · /.test(text))).toHaveLength(6)
+  for (const newest of ['Job 6 · ', 'Run 6 · ', 'Agent 6 · ']) expect(shown.some(text => text.startsWith(newest))).toBe(true)
+})
+
+test('on desktop the lists stand above the meters, so a card opening upward covers none', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  for (let i = 1; i <= 6; i++) await $.tool.call(started('b' + i, 'Job ' + i))
+  const texts = textsIn((await ui.drawn()) as never)
+  expect(texts.indexOf('+2 more')).toBeLessThan(texts.indexOf('42% context'))
+})
+
+test('the terminal keeps its meters above the lists', async ($, on) => {
+  mock.clock(on)
+  world(on)
+  await $.session.start({ ...session, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...mount, surface: 'terminal' })
+  for (let i = 1; i <= 6; i++) await $.tool.call(started('b' + i, 'Job ' + i))
+  const texts = textsIn((await ui.drawn()) as never)
+  expect(texts.indexOf('42% context')).toBeLessThan(texts.indexOf('+2 more'))
+})
+
+test('the legend opens at the bar\'s right end, clear of the counts at the left', async ($, on) => {
+  mock.clock(on)
+  world(on, { tokens: 260_800, percent: 26, window: 1_000_000, breakdown: PANEL })
+  await $.session.start(session)
+  const ui = await $.ui.mount(mount)
+  const [legend] = opensOnHover(await ui.drawn())
+  expect(legend?.props?.right).toBe(0)
+})
+
+for (const [percent, color] of [[29, undefined], [30, 'warning'], [59, 'warning'], [60, 'error']] as const) {
+  test(`the context label at ${percent}% has color ${color}`, async ($, on) => {
+    mock.clock(on)
+    world(on, { percent })
+    await $.session.start(session)
+    const ui = await $.ui.mount(mount)
+    const label = boxesIn((await ui.drawn()) as never).find(node => node.type === 'Text' && node.children?.includes(`${percent}% context`))
+    expect(label?.props?.color).toBe(color)
+    expect(label?.props?.dimColor).toBe(color === undefined)
+    const limit = boxesIn((await ui.drawn()) as never).find(node => node.type === 'Text' && node.children?.includes('91% 7d'))
+    expect(limit?.props?.color).toBeUndefined()
+  })
+}
+
+test('rows in view shrink only as far as the lists need', () => {
+  expect(rowsInView([0, 6, 0], 9)).toBe(4)
+  expect(rowsInView([2, 2, 2], 9)).toBe(4)
+  expect(rowsInView([6, 6, 0], 9)).toBe(3)
+  expect(rowsInView([6, 6, 6], 9)).toBe(2)
+  expect(rowsInView([6, 6, 6], 2)).toBe(1)
 })
 
 for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {

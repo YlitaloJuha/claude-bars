@@ -1,27 +1,43 @@
 // One quiet line above the prompt: thin bars for the context window and plan limits,
-// then the controls of the afk, wrap-up and todos mods, for those installed. Below it,
+// then the controls of the afk, wrap-up and todos mods, for those installed. With it,
 // each subagent, test run and background task with its running time. The engine reports
 // no percent-done for an agent, so its bar shows activity: it grows with tool calls and
 // fills when the agent ends. A test run is known by its command, from its tool call or,
 // outside this session, from `ps`. It shows no count: the engine hands a mod a command's
 // output only once it has ended.
 import { atom, read, update } from 'claude-code'
-import type { Color, ElementTable, EngineInterface, Register, RenderSurface, SessionContextUsage, SessionRateLimit, ToolCallResult } from 'claude-code'
+import type { Color, ElementTable, EngineInterface, Register, RenderSurface, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, ToolCallResult } from 'claude-code'
 
-import type { BackgroundTask, Meter, Minibar, TestRun } from '../types'
+import type { BackgroundTask, ContextBreakdown, Meter, Minibar, TestRun } from '../types'
 
 const CELLS = 8
 const BAR_WIDTH = 56
 const MINI_WIDTH = 28
 const BAR_HEIGHT = 3
+// A fluid bar's thickness and its zone line's, in rows of text, with the step between them.
+const FLUID_BAR_ROWS = 0.2
+const ZONE_ROWS = 0.1
+const ZONE_GAP = 0.2
+const PART_GAP = 0.2
+// How much more of the line the context bar takes than a limit bar.
+const CONTEXT_WEIGHT = 3
+// How often a run of responses may ask for the breakdown again.
+const BREAKDOWN_MS = 30_000
 const TOOLS_FOR_FULL_BAR = 30
 const MAX_RUNNING_FILL = 0.9
 const MAX_ROWS = 4
+// The band's rows the meters and the other mods' rows take before the lists get theirs.
+const LINE_ROWS = 3
+// A card taller than the window scrolls, and each redraw takes it back to its top.
+const MAX_CARD_ROWS = 20
 const TICK_MS = 1000
 const MAX_LABEL = 70
 const COMPACT_FROM_PERCENT = 70
 // Past roughly this many tokens the model decides worse, whatever the window's size.
 const SMART_ZONE_TOKENS = 100_000
+// From these shares of its window the context meter's label turns yellow, then red.
+const YELLOW_LABEL_PERCENT = 30
+const RED_LABEL_PERCENT = 60
 const RECONCILE_MS = 10_000
 const LIMIT_LABELS: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: 'spend' }
 const LIVE = new Set(['pending', 'running', 'waiting', 'idle'])
@@ -56,11 +72,15 @@ const ICONS = {
   test: { text: '◎', alt: 'Test run', svg: '<path d="M5.5 1.5h3M6 1.5v4.2L2.9 11a1 1 0 0 0 .9 1.5h6.4a1 1 0 0 0 .9-1.5L8 5.7V1.5M4.4 9h5.2"/>' },
 }
 
-const COLORS = { track: '#8a8f9e40', quiet: '#8a8f9e', warning: '#d9a441', error: '#d9625b', done: '#7fb58a', smart: '#7fb58a', pastSmart: '#e8703a' }
+const COLORS = { track: '#8a8f9e40', quiet: '#8a8f9e', warning: '#d9a441', error: '#d9625b', done: '#7fb58a', smart: '#7fb58a', pastSmart: '#e8703a', other: '#9c9c9c', reserved: '#5f5f5f' }
+// The largest rows of the context bar, as the desktop's context panel colours them.
+const PART_COLORS = ['#4a8fe7', '#dd7a3c', '#4fae8c']
 
 type Proc = { pid: number; ppid: number; elapsedMs: number; command: string }
+type BarPart = { name: string; tokens: number; color: string }
 
 const meters = atom({ plugin: 'bars', key: 'meters' } as const, [] as Meter[])
+const breakdown = atom({ plugin: 'bars', key: 'breakdown' } as const, null as ContextBreakdown | null)
 const agents = atom({ plugin: 'bars', key: 'agents' } as const, {} as Record<string, Minibar>)
 const tasks = atom({ plugin: 'bars', key: 'tasks' } as const, {} as Record<string, BackgroundTask>)
 const tests = atom({ plugin: 'bars', key: 'tests' } as const, {} as Record<string, TestRun>)
@@ -207,14 +227,65 @@ export function notifiedStatuses(text: string): Record<string, string> {
   return Object.fromEntries([...text.matchAll(/<task-id>([^<]+)<\/task-id>(?:(?!<task-id>)[\s\S])*?<status>([^<]+)<\/status>/g)].map(m => [m[1] ?? '', m[2] ?? '']))
 }
 
-export function metersOf(context: SessionContextUsage, limits: readonly SessionRateLimit[]): Meter[] {
-  const rows = context.percent === undefined ? [] : [{ label: 'context', percent: context.percent, tokens: context.tokens ?? Math.round((context.window * context.percent) / 100) }]
+/** What the bar needs of the engine's breakdown: tool schemas loaded on demand are outside the window. */
+export function breakdownOf(from: SessionContextBreakdown): ContextBreakdown {
+  return { scale: from.rawMaxTokens, rows: from.categories.flatMap(c => (c.kind === 'deferred' ? [] : [{ name: c.name, tokens: c.tokens, kind: c.kind }])) }
+}
+
+const usedIn = (known: ContextBreakdown) => known.rows.reduce((sum, row) => sum + (row.kind === 'used' ? row.tokens : 0), 0)
+
+/** The context meter reads against the window compaction runs at, once known, as the context panel does. */
+export function metersOf(context: SessionContextUsage, limits: readonly SessionRateLimit[], known?: ContextBreakdown | null): Meter[] {
+  const rows = []
+  if (context.percent !== undefined) {
+    const tokens = context.tokens ?? Math.round((context.window * context.percent) / 100)
+    const hasScale = known != null && known.scale > 0
+    const percent = hasScale ? Math.round((Math.max(tokens, usedIn(known)) * 100) / known.scale) : context.percent
+    rows.push({ label: 'context', percent, tokens, scale: hasScale ? known.scale : context.window })
+  }
   return [...rows, ...limits.map(l => ({ label: LIMIT_LABELS[l.kind] ?? l.kind, percent: Math.round(l.percentUsed) }))]
+}
+
+/**
+ * The context bar's parts and its legend, grouped as the context panel groups them: the
+ * largest rows in colour and the rest as one, then what came since the breakdown was
+ * counted, which the live figure shows and the breakdown does not yet.
+ */
+export function contextParts(known: ContextBreakdown, tokens: number): { filled: BarPart[]; reserved?: BarPart; legend: BarPart[] } {
+  const used = known.rows.filter(row => row.kind === 'used').sort((a, b) => b.tokens - a.tokens)
+  const since = Math.max(0, tokens - usedIn(known))
+  const colored = used.map((row, i) => ({ name: row.name, tokens: row.tokens, color: PART_COLORS[i] ?? COLORS.other }))
+  const rest = colored.slice(PART_COLORS.length)
+  const sinceRows = since > 0 ? [{ name: 'Since last update', tokens: since, color: COLORS.other }] : []
+  const buffer = known.rows.find(row => row.kind === 'buffer')
+  const reserved = buffer === undefined ? undefined : { name: buffer.name, tokens: buffer.tokens, color: COLORS.reserved }
+  const free = known.rows.find(row => row.kind === 'free')
+  return {
+    filled: [...colored.slice(0, PART_COLORS.length), ...(rest.length > 0 ? [{ name: 'Other', tokens: rest.reduce((sum, row) => sum + row.tokens, 0), color: COLORS.other }] : []), ...sinceRows],
+    reserved,
+    legend: [...colored, ...sinceRows, ...(reserved === undefined ? [] : [reserved]), ...(free === undefined ? [] : [{ name: free.name, tokens: Math.max(0, free.tokens - since), color: COLORS.track }])],
+  }
+}
+
+/** Tokens as the context panel writes them: `775`, `18.1k`, `196k`. */
+export function tokenText(tokens: number): string {
+  return tokens < 1000 ? String(tokens) : `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}k`
 }
 
 export function miniFraction(agent: Minibar): number {
   return agent.status === 'running' ? Math.min(MAX_RUNNING_FILL, agent.tools / TOOLS_FOR_FULL_BAR) : 1
 }
+
+/** How many of each list's newest rows fit `room` rows, a list's count line included. */
+export function rowsInView(lengths: readonly number[], room: number): number {
+  const rowsAt = (inView: number) => lengths.reduce((sum, n) => sum + Math.min(n, inView) + (n > inView ? 1 : 0), 0)
+  let inView = MAX_ROWS
+  while (inView > 1 && rowsAt(inView) > room) inView--
+  return inView
+}
+
+// A card is narrow and cuts a long row, so there what the row came to goes first.
+const rowText = (label: string, tail: string, inCard: boolean) => (inCard ? `${tail} · ${label}` : `${label} · ${tail}`)
 
 // Only the context meter has tokens: it shows the zone the model does its best work in.
 export const meterColor = (m: Meter) =>
@@ -244,6 +315,52 @@ function drawBar(ui: ElementTable, surface: RenderSurface, fraction: number, wid
   return Svg === undefined ? null : (Svg as never as (props: Record<string, unknown>) => ReturnType<ElementTable['Text']>)({ source, width, height: BAR_HEIGHT, alt })
 }
 
+// Boxes rather than a drawing, since a drawing has a width of its own and a Box fills its row.
+function drawFluidBar(ui: ElementTable, total: number, filled: readonly BarPart[], reserved?: BarPart, zone?: { tokens: number; color: string }) {
+  const { Box } = ui
+  const shown = filled.filter(p => p.tokens > 0)
+  const free = Math.max(0, total - shown.reduce((sum, p) => sum + p.tokens, 0) - (reserved?.tokens ?? 0))
+  // A share of the bar, since the engine holds a grow to at most 10000.
+  const grow = (tokens: number) => Math.min(10_000, Math.round((tokens * 10_000) / Math.max(total, 1)))
+  const part = (p: BarPart) => <Box flexGrow={grow(p.tokens)} backgroundColor={p.color} />
+  return (
+    <Box flexDirection="column" flexGrow={1} minWidth={0} rowGap={ZONE_GAP}>
+      <Box flexDirection="row" height={FLUID_BAR_ROWS} columnGap={PART_GAP} backgroundColor={COLORS.track} overflow="hidden">
+        {shown.map(part) as never}
+        {free > 0 && <Box flexGrow={grow(free)} />}
+        {reserved !== undefined && part(reserved)}
+      </Box>
+      {/* Every bar keeps this row, so that a limit bar stays level with the context bar. */}
+      <Box flexDirection="row" height={ZONE_ROWS}>
+        {zone !== undefined && <Box flexGrow={grow(zone.tokens)} backgroundColor={zone.color} />}
+        {zone !== undefined && zone.tokens < total && <Box flexGrow={grow(total - zone.tokens)} />}
+      </Box>
+    </Box>
+  )
+}
+
+function drawLegend(ui: ElementTable, meter: Meter, scale: number, legend: readonly BarPart[]) {
+  const { Box, Text } = ui
+  const line = (key: string, color: string, name: string, value: string) => (
+    <Box key={key} flexDirection="row" justifyContent="space-between" columnGap={3}>
+      <Box flexDirection="row" columnGap={1}>
+        <Text color={color}>■</Text>
+        <Text>{name}</Text>
+      </Box>
+      <Text dimColor>{value}</Text>
+    </Box>
+  )
+  // At the bar's right end: the pointer on a card is on its bar, so a card over the counts at
+  // the left would keep itself open and hide them from a pointer coming up from the prompt.
+  return (
+    <Box flexDirection="column" position="absolute" right={0} display="none" hover={{ display: 'flex' }}>
+      <Text>{`${meter.percent}% used · ${tokenText(meter.tokens ?? 0)} / ${tokenText(scale)}`}</Text>
+      {legend.map(p => line(p.name, p.color, p.name, `${tokenText(p.tokens)} · ${((p.tokens * 100) / Math.max(scale, 1)).toFixed(1)}%`)) as never}
+      {line('zone', COLORS.smart, 'Best range', `up to ${tokenText(SMART_ZONE_TOKENS)}`)}
+    </Box>
+  )
+}
+
 function drawIcon(ui: ElementTable, surface: RenderSurface, kind: keyof typeof ICONS) {
   const { Svg, Text } = ui as ElementTable & { Svg?: ElementTable['Text'] }
   if (surface === 'terminal' || Svg === undefined) return <Text dimColor>{ICONS[kind].text}</Text>
@@ -260,9 +377,13 @@ async function tick($: EngineInterface) {
   }
 }
 
+// `summary` is counted locally, so a breakdown sends no request.
 async function refreshMeters($: EngineInterface) {
-  const usage = await $.session.usage()
-  await update($, meters, () => metersOf(usage.context, usage.rateLimits))
+  const usage = await $.session.usage({ breakdown: 'summary' })
+  const fresh = usage.context.breakdown
+  if (fresh !== undefined) await update($, breakdown, () => breakdownOf(fresh))
+  const known = await read($, breakdown)
+  await update($, meters, () => metersOf(usage.context, usage.rateLimits, known))
 }
 
 // An agent that was stopped raises no turn.complete: the engine's list is the truth.
@@ -356,6 +477,8 @@ async function settleTest($: EngineInterface, id: string, result: ToolCallResult
 }
 
 export const register: Register = on => {
+  let breakdownAt = 0
+
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await refreshMeters($)
@@ -374,12 +497,19 @@ export const register: Register = on => {
   })
 
   on('session.measure', async ($, e, next) => {
-    await update($, meters, () => metersOf(e.context, e.rateLimits))
+    const known = await read($, breakdown)
+    await update($, meters, () => metersOf(e.context, e.rateLimits, known))
+    const now = await $.clock.now()
+    if (now - breakdownAt >= BREAKDOWN_MS) {
+      breakdownAt = now
+      await refreshMeters($).catch(() => undefined)
+    }
     return next(e)
   })
 
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear' || e.reason === 'resume') {
+      await update($, breakdown, () => null)
       await update($, agents, () => ({}))
       await update($, tasks, () => ({}))
       await update($, tests, () => ({}))
@@ -506,48 +636,97 @@ export const register: Register = on => {
     const now = Math.max(await read($, clockNow), await $.clock.now())
     const running = Object.entries(await read($, tasks))
     const testRuns = Object.entries(await read($, tests))
-    const agentRow = ([id, agent]: [string, Minibar]) => (
+    const agentRow = ([id, agent]: [string, Minibar], inCard: boolean) => (
       <Box key={id} flexDirection="row" alignItems="center" gap={1}>
         {drawIcon(ui, e.surface, 'agent')}
         {drawBar(ui, e.surface, miniFraction(agent), MINI_WIDTH, CELLS / 2, miniColor(agent), agent.status === 'failed' ? 'error' : agent.status === 'done' ? 'success' : undefined, `${agent.label}: ${agent.status}`)}
-        <Text dimColor wrap="truncate-end">{`${agent.label} · ${agent.status === 'running' ? `${agent.tools} ${agent.tools === 1 ? 'tool' : 'tools'}` : agent.status} · ${elapsed((agent.endedAt ?? now) - agent.startedAt)}`}</Text>
+        <Text dimColor wrap="truncate-end">{rowText(agent.label, `${agent.status === 'running' ? `${agent.tools} ${agent.tools === 1 ? 'tool' : 'tools'}` : agent.status} · ${elapsed((agent.endedAt ?? now) - agent.startedAt)}`, inCard)}</Text>
       </Box>
     )
-    const testRow = ([id, run]: [string, TestRun]) => (
+    const testRow = ([id, run]: [string, TestRun], inCard: boolean) => (
       <Box key={id} flexDirection="row" alignItems="center" gap={1}>
         {drawIcon(ui, e.surface, 'test')}
-        <Text color={run.status === 'failed' ? 'error' : undefined} dimColor={run.status !== 'failed'} wrap="truncate-end">{`${run.label} · ${run.status === 'running' ? '' : `${run.status} · `}${elapsed((run.endedAt ?? now) - run.startedAt)}`}</Text>
+        <Text color={run.status === 'failed' ? 'error' : undefined} dimColor={run.status !== 'failed'} wrap="truncate-end">{rowText(run.label, `${run.status === 'running' ? '' : `${run.status} · `}${elapsed((run.endedAt ?? now) - run.startedAt)}`, inCard)}</Text>
       </Box>
     )
-    const taskRow = ([id, task]: [string, BackgroundTask]) => (
+    const taskRow = ([id, task]: [string, BackgroundTask], inCard: boolean) => (
       <Box key={id} flexDirection="row" alignItems="center" gap={1}>
         {drawIcon(ui, e.surface, 'task')}
-        <Text dimColor wrap="truncate-end">{`${task.label} · ${elapsed(now - task.startedAt)}`}</Text>
+        <Text dimColor wrap="truncate-end">{rowText(task.label, elapsed(now - task.startedAt), inCard)}</Text>
       </Box>
     )
-    // The newest stay in view; the rest open on hover, or stay hidden where no pointer reaches.
-    const listed = <T,>(key: string, rows: Array<[string, T]>, draw: (row: [string, T]) => unknown) => {
-      const hidden = rows.slice(0, -MAX_ROWS)
+    const inView = rowsInView([minis.length, testRuns.length, running.length], Math.min(e.props.maxRows, e.props.scroll.bodyRows) - LINE_ROWS - (isMenuOpen ? 1 : 0))
+    // The terminal draws bars in fixed cells and clips a card to the band, so its bars keep
+    // their width and its older rows open in place.
+    const isGraphical = e.surface !== 'terminal'
+    const known = await read($, breakdown)
+    const meterRow = (m: Meter) => {
+      const labelColor = m.tokens === undefined ? undefined : m.percent >= RED_LABEL_PERCENT ? 'error' : m.percent >= YELLOW_LABEL_PERCENT ? 'warning' : undefined
+      const text = <Text color={labelColor} dimColor={labelColor === undefined} wrap={isGraphical ? 'truncate-end' : undefined}>{`${m.percent}% ${m.label}`}</Text>
+      if (!isGraphical) {
+        return (
+          <Box key={m.label} flexDirection="row" alignItems="center" gap={1}>
+            {drawBar(ui, e.surface, m.percent / 100, BAR_WIDTH, CELLS, meterColor(m), meterTheme(m), `${m.percent}% ${m.label}`)}
+            {text}
+          </Box>
+        )
+      }
+      if (m.tokens === undefined) {
+        return (
+          <Box key={m.label} flexDirection="row" alignItems="center" gap={1} flexGrow={1} minWidth={0}>
+            {drawFluidBar(ui, 100, [{ name: m.label, tokens: m.percent, color: meterColor(m) }])}
+            {text}
+          </Box>
+        )
+      }
+      const scale = m.scale ?? 1
+      const parts = known === null ? undefined : contextParts(known, m.tokens)
       return (
-        <Box key={key} flexDirection="column">
-          {hidden.length > 0 && <Text dimColor>{`+${hidden.length} more`}</Text>}
-          {hidden.length > 0 && <Box flexDirection="column" display="none" hover={{ display: 'flex' }}>{hidden.map(draw) as never}</Box>}
-          {rows.slice(-MAX_ROWS).map(draw) as never}
+        <Box key={m.label} flexDirection="row" alignItems="center" gap={1} flexGrow={CONTEXT_WEIGHT} minWidth={0}>
+          {drawFluidBar(ui, scale, parts?.filled ?? [{ name: m.label, tokens: m.tokens, color: meterColor(m) }], parts?.reserved, { tokens: SMART_ZONE_TOKENS, color: COLORS.smart })}
+          {text}
+          {parts !== undefined && drawLegend(ui, m, scale, parts.legend)}
         </Box>
       )
     }
+    // The newest stay in view, next to the prompt. The rest open on hover over the count, as
+    // a card above it that moves nothing: rows opening inside the band fight its scrolling.
+    // Where no pointer reaches, they stay hidden.
+    const listed = <T,>(key: string, rows: Array<[string, T]>, draw: (row: [string, T], inCard: boolean) => unknown) => {
+      const hidden = rows.slice(0, -inView)
+      const opened = hidden.slice(-MAX_CARD_ROWS)
+      return (
+        <Box key={key} flexDirection="column">
+          {hidden.length > 0 && (
+            <Box key={`${key}-more`} flexDirection="column">
+              <Text dimColor>{`+${hidden.length} more`}</Text>
+              <Box flexDirection="column" position={isGraphical ? 'absolute' : undefined} display="none" hover={{ display: 'flex' }}>
+                {hidden.length > opened.length && <Text dimColor>{`+${hidden.length - opened.length} older`}</Text>}
+                {opened.map(row => draw(row, isGraphical)) as never}
+              </Box>
+            </Box>
+          )}
+          {rows.slice(-inView).map(row => draw(row, false)) as never}
+        </Box>
+      )
+    }
+    const lists = (
+      <Box flexDirection="column">
+        {minis.length > 0 && listed('agents', minis, agentRow)}
+        {testRuns.length > 0 && listed('tests', testRuns, testRow)}
+        {running.length > 0 && listed('tasks', running, taskRow)}
+      </Box>
+    )
+    // A card opens upward, so the lists stand above the meters and it covers no meter. The
+    // terminal's rows open in place, and there the meters keep the top.
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2}>
-          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={2}>
-            {rows.map(m => (
-              <Box key={m.label} flexDirection="row" alignItems="center" gap={1}>
-                {drawBar(ui, e.surface, m.percent / 100, BAR_WIDTH, CELLS, meterColor(m), meterTheme(m), `${m.percent}% ${m.label}`)}
-                <Text dimColor>{`${m.percent}% ${m.label}`}</Text>
-              </Box>
-            ))}
+        {isGraphical && lists}
+        <Box flexDirection="row" flexWrap={isGraphical ? 'nowrap' : 'wrap'} justifyContent="space-between" alignItems="center" columnGap={2}>
+          <Box flexDirection="row" flexWrap={isGraphical ? 'nowrap' : 'wrap'} flexGrow={isGraphical ? 1 : 0} minWidth={0} alignItems="center" columnGap={2}>
+            {rows.map(meterRow) as never}
           </Box>
-          <Box flexDirection="row" alignItems="center" columnGap={1}>
+          <Box flexDirection="row" flexShrink={0} alignItems="center" columnGap={1}>
             {canCompact && <Button key="compact" label="Compact" plain dimColor onPress={() => compact($)} />}
             {hasTodoList && <Button key="todos" label={todoCount === 0 ? 'todos ✓' : todoCount === 1 ? '1 todo' : `${todoCount} todos`} plain dimColor onPress={() => $.todos.toggle({})} />}
             {mode !== null && (
@@ -564,9 +743,7 @@ export const register: Register = on => {
             ))}
           </Box>
         )}
-        {minis.length > 0 && listed('agents', minis, agentRow)}
-        {testRuns.length > 0 && listed('tests', testRuns, testRow)}
-        {running.length > 0 && listed('tasks', running, taskRow)}
+        {!isGraphical && lists}
         {rest}
       </Box>
     )
