@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="type: Claude Code mod" src="https://img.shields.io/badge/type-Claude%20Code%20mod-6f42c1?style=flat-square">
-  <img alt="tested on: Claude Code 2.1.292" src="https://img.shields.io/badge/tested%20on-Claude%20Code%202.1.292-D97757?style=flat-square">
+  <img alt="tested on: Claude Code 2.1.309" src="https://img.shields.io/badge/tested%20on-Claude%20Code%202.1.309-D97757?style=flat-square">
   <img alt="tests: 31 passing" src="https://img.shields.io/badge/tests-31%20passing-2ea44f?style=flat-square">
   <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-555?style=flat-square">
 </p>
@@ -30,9 +30,6 @@ claude plugin install bars --marketplace YlitaloJuha/claude-bars
 ```
 
 In the desktop app, click + next to the prompt box, then Plugins, Add marketplace with `YlitaloJuha/claude-bars`, then Add plugin.
-
-> [!NOTE]
-> This repository is private for now. Installing needs read access and a GitHub credential on your machine, such as `gh auth login` then `gh auth setup-git`.
 
 ## What it does
 
@@ -67,8 +64,8 @@ No network, no shell commands and no file access through the mod API. It reads u
 - It sees this session only. Separate sessions you start from the app are not listed.
 - The hover list has only been checked in tests, and it needs a pointer: where there is none, the older rows stay folded.
 - Tasks are known from the moment they start in this session, so ones started before a resume are not listed.
-- The drawn bars and icons are for the desktop app, VS Code and mobile. They have been seen in the desktop app, and the terminal version in the terminal, but not in VS Code or on mobile.
 - If you use the `skins` mod, run `/skin band off` so its rings do not show as well.
+- Claude Code draws the band above the prompt only in the terminal and the desktop app, so what this mod draws there does not show in VS Code or on mobile.
 
 ## Develop
 
@@ -97,6 +94,6 @@ This mod works on its own, and it also works side by side with my other Claude C
 
 Provided **as is, with no warranty of any kind**. You use it at your own risk, and the author is not liable for anything that results from using it, including lost work, usage charges or changes to your code.
 
-**It may break.** It relies on how Claude Code works today, and has been tested on version 2.1.292. It may stop working after a future update if Anthropic changes things.
+**It may break.** It relies on how Claude Code works today, and has been tested on versions 2.1.292 and 2.1.309. It may stop working after a future update if Anthropic changes things.
 
 This is an independent, unofficial project. It is not affiliated with, endorsed by or supported by Anthropic.

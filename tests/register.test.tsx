@@ -174,6 +174,7 @@ test('an agent gets a thin bar that counts its tools and ends done', async ($, o
   const ui = await $.ui.mount(mount)
   await $.agent.spawn(spawn('Read the API'))
   await $.tool.call({ tool: 'Read', file_path: 'a', agentId: 'A1' } as never)
+  expect((await ui.find({ type: 'Text', text: /Read the API/ }))?.text).toBe('Read the API · 1 tool · 0s')
   await $.tool.call({ tool: 'Read', file_path: 'b', agentId: 'A1' } as never)
   await $.tool.call({ tool: 'Read', file_path: 'c' } as never)
   expect((await ui.find({ type: 'Text', text: /Read the API/ }))?.text).toBe('Read the API · 2 tools · 0s')

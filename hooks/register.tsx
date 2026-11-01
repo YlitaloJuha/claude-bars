@@ -292,7 +292,7 @@ export const register: Register = on => {
       <Box key={id} flexDirection="row" alignItems="center" gap={1}>
         {drawIcon(ui, e.surface, 'agent')}
         {drawBar(ui, e.surface, miniFraction(agent), MINI_WIDTH, CELLS / 2, miniColor(agent), agent.status === 'failed' ? 'error' : agent.status === 'done' ? 'success' : undefined, `${agent.label}: ${agent.status}`)}
-        <Text dimColor wrap="truncate-end">{`${agent.label} · ${agent.status === 'running' ? `${agent.tools} tools` : agent.status} · ${elapsed((agent.endedAt ?? now) - agent.startedAt)}`}</Text>
+        <Text dimColor wrap="truncate-end">{`${agent.label} · ${agent.status === 'running' ? `${agent.tools} ${agent.tools === 1 ? 'tool' : 'tools'}` : agent.status} · ${elapsed((agent.endedAt ?? now) - agent.startedAt)}`}</Text>
       </Box>
     )
     const taskRow = ([id, task]: [string, BackgroundTask]) => (
