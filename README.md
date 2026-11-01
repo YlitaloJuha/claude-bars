@@ -44,9 +44,9 @@ In the desktop app, click + next to the prompt box, then Plugins, Add marketplac
 - **Compact button:** Appears on the line from 70% context, and hides while a turn runs.
 - **Works alone, shares when it can:** If you also install [`claude-afk`](https://github.com/YlitaloJuha/claude-afk), [`claude-wrap-up`](https://github.com/YlitaloJuha/claude-wrap-up) or [`claude-todos`](https://github.com/YlitaloJuha/claude-todos), they put their controls on this line instead of their own row.
 
-<p align="center"><img src="docs/desktop.png" alt="bars in the desktop app, listing a finished agent and three background tasks with icons and running times" width="660"></p>
+<p align="center"><img src="docs/desktop.png" alt="bars in the desktop app: a running test above the context and limit bars, with the context label in yellow at 31%" width="660"></p>
 
-<p align="center"><sub>In the desktop app: a finished agent and three background tasks, with icons and running times. The tasks are demos, and the context bar has turned amber at 86%.</sub></p>
+<p align="center"><sub>In the desktop app: a running test above the bars, the context bar split by what fills it, and its label yellow at 31%. The row of shortcuts below it comes from <a href="https://github.com/YlitaloJuha/claude-dev-shortcuts">claude-dev-shortcuts</a>.</sub></p>
 
 ## Commands
 
